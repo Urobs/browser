@@ -1,4 +1,4 @@
-import socket, ssl
+import socket, ssl, gzip
 import chardet
 class URL:
     def __init__(self, url: str) -> None:
@@ -32,7 +32,8 @@ class URL:
         
         custom_request_headers = {
             "Connection": "close",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+            "Accept-Encoding": "gzip"
         }
         custom_headers_string = "\r\n" + "\r\n".join(f"{k}: {v}" for k, v in custom_request_headers.items())
         # encode and send the http message
@@ -59,15 +60,9 @@ class URL:
             body_data += chunk
 
         conn.close()
-
-        # guess encoding by html body
-        detect = chardet.detect(body_data)
-        encoding = detect.get("encoding")
-        if encoding == 'GB2312':
-            encoding = 'GBK' # GBK is a superset of GB2312 
         
-        # parse status line of headers
-        statusline_and_headers = statusline_and_header_data.decode(encoding=encoding, errors="replace")
+        # Decode the headers
+        statusline_and_headers = statusline_and_header_data.decode("ascii", errors="ignore")
         statusline, headers = statusline_and_headers.split("\r\n", 1)
         version, status, explanation = statusline.split(" ", 2)
         assert status == "200", "{}: {}".format(status, explanation)
@@ -81,9 +76,35 @@ class URL:
                 break
             header, value = line.split(":", 1)
             headers_obj[header.lower()] = value.strip()
-        
-        assert "transfer-encoding" not in headers_obj
-        assert "content-encoding" not in headers_obj
+
+        if headers_obj.get("transfer-encoding") == "chunked":
+            chunks = []
+            while True:
+                # Find the position of the first \r\n, which ends the chunk size
+                chunk_size_end_pos = body_data.find(b'\r\n')
+                # Get the chunk size and convert it from hex to int
+                chunk_size = int(body_data[:chunk_size_end_pos].decode('ascii'), 16)
+                # If chunk size is 0, it's the last chunk
+                if chunk_size == 0:
+                    break
+                # Start position of the chunk data
+                chunk_start_pos = chunk_size_end_pos + 2  # 2 for \r\n
+                # End position of the chunk data
+                chunk_end_pos = chunk_start_pos + chunk_size
+                # Append the chunk to our chunks list
+                chunks.append(body_data[chunk_start_pos:chunk_end_pos])
+                # Set the remaining body data for the next iteration
+                body_data = body_data[chunk_end_pos + 2:]  # 2 for \r\n
+            # Concatenate all chunks to get the actual body
+            body_data = b''.join(chunks)
+ 
+        if headers_obj.get("content-encoding") == "gzip":
+            body_data = gzip.decompress(body_data)
+        # guess encoding by html body
+        detect = chardet.detect(body_data)
+        encoding = detect.get("encoding")
+        if encoding == 'GB2312':
+            encoding = 'GBK' # GBK is a superset of GB2312 
         
         body = body_data.decode(encoding=encoding, errors='replace')
         
@@ -101,8 +122,7 @@ def show(body: str):
                 
 def load(url: URL):
     headers, body = url.request()
-    # show(body)
-    print(headers)
+    show(body)
     
 if __name__ == '__main__':
     import sys
