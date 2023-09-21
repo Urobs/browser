@@ -3,21 +3,31 @@ import chardet
 class URL:
     def __init__(self, url: str) -> None:
         self.scheme, url = url.split("://", 1)
-        assert self.scheme in ["http", "https"], \
+        assert self.scheme in ["http", "https", "file"], \
             "Unknown Scheme {}".format(self.scheme)
         if "/" not in url:
             url = url + "/"
-        self.host, url = url.split("/", 1)
-        self.path = "/" + url
-        if self.scheme == "http":
-            self.port = 80
-        elif self.scheme == "https":
-            self.port = 443
-        
-        if ":" in self.host:
-            self.host, port = self.host.split(":", 1)
-            self.port = int(port)
+        if self.scheme != "file":
+            self.host, url = url.split("/", 1)
+            self.path = "/" + url
+            if self.scheme == "http":
+                self.port = 80
+            elif self.scheme == "https":
+                self.port = 443
+            
+            if ":" in self.host:
+                self.host, port = self.host.split(":", 1)
+                self.port = int(port)
+        else:
+            self.path = url
+    def read_local_file(self):
+        content = ''
+        with open(self.path, 'r') as file:
+            content = file.read()
+        return content
     def request(self):
+        if self.scheme == "file":
+            return {}, self.read_local_file()
         conn = socket.socket(
             family=socket.AF_INET, # through internet
             proto=socket.IPPROTO_TCP, # tcp 
