@@ -2,9 +2,12 @@ import re
 import socket, ssl, gzip
 import chardet
 
-
+MAX_REDIRECT = 10
 class URL:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, rd_count=0) -> None:
+        self.view_source = False
+        self.redirect = False
+        self.rd_count = rd_count
         if url.startswith("data:"):
             self.scheme = "data"
             mediatype_and_encoding, self.data = url[5:].split(",", 1)
@@ -18,6 +21,9 @@ class URL:
                     self.mediatype = mediatype_and_encoding
                     self.encoding = ""
             return
+        if url.startswith("view-source:"):
+            url = url.replace("view-source:", "", 1)
+            self.view_source = True
         self.scheme, url = url.split("://", 1)
         assert self.scheme in ["http", "https", "file"], "Unknown Scheme {}".format(
             self.scheme
@@ -106,7 +112,9 @@ class URL:
         )
         statusline, headers = statusline_and_headers.split("\r\n", 1)
         version, status, explanation = statusline.split(" ", 2)
-        assert status == "200", "{}: {}".format(status, explanation)
+        if status.startswith("3"):
+            self.redirect = True
+        # assert status == "200", "{}: {}".format(status, explanation)
 
         # parse headers
         headers_obj = {}
@@ -141,6 +149,14 @@ class URL:
 
         if headers_obj.get("content-encoding") == "gzip":
             body_data = gzip.decompress(body_data)
+        if self.redirect and headers_obj.get("location"):
+            if self.rd_count > MAX_REDIRECT:
+                return self.view_source, headers_obj, "重定向次数过多"
+            location = headers_obj.get("location")
+            if len(location.split("://", 1)) == 1:
+                location = "{}://{}{}".format(self.scheme, self.host, location)
+            n_url = URL(location, self.rd_count + 1)
+            return n_url.request()
         # guess encoding by html body
         detect = chardet.detect(body_data)
         encoding = detect.get("encoding")
@@ -149,18 +165,12 @@ class URL:
 
         body = body_data.decode(encoding=encoding, errors="replace")
 
-        return headers_obj, body
-
+        return self.view_source, headers_obj, body
 
 def show(body: str):
-    is_in_tag = False
-    tag = ''
-    is_in_body = False
-    result = ''
-    
+    maybe_entity = False
     is_entity = False
-    entity_str = ''
-    
+    collect = ''
     lt = "&lt;"
     gt = "&gt;"
     
@@ -168,6 +178,37 @@ def show(body: str):
         gt: ">",
         lt: "<"
     }
+    
+    result = ""
+    for c in body:
+        if c == "&":
+            collect += c
+            maybe_entity = True
+        elif c == ";" and maybe_entity:
+            maybe_entity = False
+            collect += c
+            if collect in str_2_entity.keys():
+                is_entity = True
+            else:
+                collect = ""
+        elif maybe_entity:
+            collect += c
+            
+        if is_entity:
+            result = result[:(-(len(collect) - 1))] + str_2_entity[collect]
+            is_entity = False
+            collect = ""
+            
+        else:
+            result += c
+    print(result)
+            
+
+def transform(body: str):
+    is_in_tag = False
+    tag = ''
+    is_in_body = False
+    result = ''
     
     # check if in tag
     # check what the tag is
@@ -178,7 +219,6 @@ def show(body: str):
             is_in_tag = True
         elif c == '>':
             is_in_tag = False
-            entity_str = ''
             if tag == 'body':
                 is_in_body = True
             elif tag == '/body':
@@ -186,29 +226,18 @@ def show(body: str):
         elif is_in_tag:
             tag += c
         elif is_in_body:
-            if c == '&':
-                entity_str += c
-            elif c == ';' and entity_str != "":
-                entity_str += ";"
-                if entity_str == lt or entity_str == gt:
-                    is_entity = True
-                else:
-                    is_entity = False
-            elif entity_str != "":
-                entity_str += c
-            if is_entity:
-                result = result[:(-(len(entity_str) - 1))] + str_2_entity[entity_str]
-                entity_str = ""
-                is_entity = False
-            else:
-                result += c
+            result += c
 
-    print(result)
+    return result
     
 
 def load(url: URL):
-    headers, body = url.request()
-    show(body)
+    view_source, headers, body = url.request()
+    if view_source:
+        show(body)
+    else:
+        show(transform(body))
+        
 
 
 if __name__ == "__main__":
